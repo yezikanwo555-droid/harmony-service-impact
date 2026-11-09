@@ -1,0 +1,62 @@
+# 元服务性能对比
+
+面向 HarmonyOS / OpenHarmony 元服务的 Windows 桌面测试工具。填写改造前后两个包名，一键依次测试，生成可离线查看的 HTML 对比报告。
+
+[下载最新版本](https://github.com/yezikanwo555-droid/harmony-service-impact/releases/latest) · [详细使用说明](docs/使用说明.txt) · [网络模拟说明](docs/网络环境说明.txt)
+
+## 能做什么
+
+- 冷启动、热启动、CPU、PSS 内存、APP/HAP 包文件大小对比。
+- 自动读取系统存储页中的应用缓存，记录测试前后大小与增长量，不修改正式包。
+- 读取当前前台应用包名；可配置次数、采样间隔、日志目录。
+- 受控随机 Monkey，可设置时间、事件上限、间隔和种子。
+- Wi-Fi、蜂窝、断网及内置代理模拟；包含较慢、较快、2G/3G/4G/5G 等预设，测试结束恢复网络设置。
+- 公开 GitHub Release 检查更新、展示说明、下载并校验 SHA256；无需 GitHub 登录。
+
+## 开始使用
+
+1. 下载 Release 的 `ServiceImpact-版本-windows-x64.zip`，解压运行 `ServiceImpact.exe`，无需安装 Python。
+2. 电脑安装 HarmonyOS SDK 的 hdc；手机开启开发者调试、授权电脑并保持解锁亮屏。可在“设备与高级设置”指定 hdc 路径和设备。
+3. 将两个版本以不同包名安装到同一设备，在“测试工作台”填写包名，或分别打开应用后点击“获取当前应用包名”。
+4. 设置测试方式、次数、网络环境和保存目录。比较包体时，分别选择对应的 APP/HAP 文件。
+5. 点击“开始一键对比”。结果在“版本对比”页显示，完整报告自动生成。
+
+同包名覆盖安装的两个版本，需要更换版本后分别采集、导入结果，不能一键并存比较。工具不负责安装应用。
+
+## 测量边界
+
+冷启动采用 `aa start -W` 的 TotalTime（首帧口径），需要设备 API 20+ 支持，不以命令执行时间替代。冷启动保留数据与缓存。CPU 按整机容量计，内存使用同 UID 可见进程的 PSS 合计。包体为所选文件大小，并非安装占用。
+
+系统缓存和自动代理页面主要适配 HarmonyOS 7 中文设置布局；其他版本需要验证。锁屏、权限不足或布局变化会报告失败，缺失值不计为零。系统页面缓存是前后快照，并非持续实时监控。
+
+内置模拟仅作用于遵循系统 HTTP 代理的流量，HTTPS 保持加密；不覆盖 UDP/QUIC 和绕过代理的请求。延迟及失败按新连接模拟，**不是 IP 层丢包**；3G/5G 名称是测试预设，不改变真实通信制式。代理统计不能按包名归因。蜂窝模式需可用 SIM 卡，尚需在实际目标设备验证。
+
+停止、正常退出及普通异常会尝试恢复网络。设备锁屏、断线或进程被强制结束时，解锁连接原设备后，在网络设置中点击“恢复上次环境”。
+
+本工具关注性能和缓存影响，不验证埋点内容；最终无影响结论仍需业务功能回归及多轮对照采样。Monkey 请使用测试账号。
+
+## 更新与本地数据
+
+“关于与更新”支持手动/启动时检查正式版本。新版 ZIP 校验通过后，关闭旧版、解压新版运行；不会自动覆盖或执行下载文件。
+
+设置保存在 `%LOCALAPPDATA%\ServiceImpact\impact_settings.json`，更新下载在其 `updates` 子目录，测试结果保存在自选目录。首次从旧版升级时，可以把旧 `impact_settings.json` 放在新 EXE 旁；尚无新版设置时会读取并迁移。GitHub 仓库只包含源码、合成测试和说明，不包含业务包、实测日志或凭据。检查更新仅请求 Release 信息，不上传采集结果。
+
+## 源码运行与构建
+
+使用 Windows x64、Python 3.14（包含 tkinter）。运行时仅依赖标准库，设备采集另需 hdc。
+
+```powershell
+python src/impact_app.py
+$env:PYTHONPATH = "$PWD/src"
+python -m unittest discover -s tests -p 'test_*.py' -v
+python -m pip install -r requirements-build.txt
+python scripts/build_release.py
+```
+
+构建脚本生成 `dist/ServiceImpact-版本-windows-x64.zip` 和 `dist/SHA256SUMS.txt`。开发测试不需要手机，使用合成数据和模拟设备响应。真实设备兼容性需另行检查。
+
+## 发布新版
+
+修改 `src/app_meta.py` 的 VERSION，更新 `CHANGELOG.md`，运行测试并构建。将代码推送到仓库，在 GitHub 创建同版本正式 Release（如 `v2.0.1`），上传 ZIP 和 SHA256SUMS。待 ZIP 上传完整后发布 Release。更新客户端读取 GitHub 资产的 SHA256 digest；没有有效校验信息时会拒绝下载。
+
+代码结构：`src/impact_app.py` 为控制器，`desktop_view.py` 为界面，`impact_engine.py` 为采集与报告，`comparison_job.py` 为两组调度，`network_session.py` 为网络恢复，`update_service.py` 为更新校验。
