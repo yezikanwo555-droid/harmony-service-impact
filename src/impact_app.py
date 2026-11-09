@@ -256,6 +256,7 @@ class App(UpdateMixin,tk.Tk):
     def prepare_live(self,c):
         self.sample_rows=[];self.cache_snapshots=[]
         self.page_cache_active=c['cache_mode']=='system_ui'
+        self.monitor_charts.reset(c)
         self.cpu.set('—'); self.memory.set('—'); self.cache.set('—')
         self.resource_table.delete(*self.resource_table.get_children()); self.draw_cache()
         self.state_text.set('正在采集'+('改造前' if c['role']=='before' else '改造后')+'：'+c['bundle'])
@@ -286,30 +287,7 @@ class App(UpdateMixin,tk.Tk):
         self.log.configure(state='normal'); self.log.insert('end',text+'\n'); self.log.see('end'); self.log.configure(state='disabled')
 
     def draw_cache(self):
-        canvas=self.cache_chart; canvas.delete('all')
-        width=max(200,canvas.winfo_width()); height=145
-        canvas.create_text(12,15,text='应用磁盘缓存趋势 · MiB',anchor='w',fill='#243957',font=('Microsoft YaHei UI',10))
-        if self.page_cache_active:
-            lines=['系统存储页面快照（不是连续曲线）']
-            for p in self.cache_snapshots:
-                lines.append(('测试前' if p['stage']=='start' else '测试后')+'：'+(p['raw_text'] if p['status']=='ok' else '不可用：'+p.get('error','')))
-            good={p['stage']:p['mib'] for p in self.cache_snapshots if p['status']=='ok'}
-            if 'start' in good and 'end' in good:lines.append('增长量：约 '+engine.fmt(good['end']-good['start'],True)+' MiB（按页面值换算）')
-            canvas.create_text(12,40,text='\n'.join(lines),anchor='nw',width=width-30,fill='#243957',font=('Microsoft YaHei UI',9))
-            return
-        points=[(r['elapsed_s'],r['cache_mib']) for r in self.sample_rows if engine.finite(r.get('cache_mib'))]
-        if not points:
-            text='等待自动缓存采样' if not self.sample_rows else self.sample_rows[-1].get('cache_note','缓存不可用')
-            canvas.create_text(12,70,text=text,anchor='w',width=width-30,fill='#8a6437',font=('Microsoft YaHei UI',9)); return
-        xmax=max(1,max(p[0] for p in points)); ymax=max(1,max(p[1] for p in points))*1.1
-        canvas.create_line(45,35,45,118,width-15,118,fill='#ccd6e4')
-        canvas.create_text(40,40,text='%.1f'%ymax,anchor='e'); canvas.create_text(width-20,132,text='%.1fs'%xmax,anchor='e')
-        last=None
-        for row in self.sample_rows:
-            if not engine.finite(row.get('cache_mib')):last=None;continue
-            p=(45+row['elapsed_s']/xmax*(width-65),118-row['cache_mib']/ymax*78)
-            if last:canvas.create_line(*last,*p,fill='#2666ce',width=2)
-            canvas.create_oval(p[0]-2,p[1]-2,p[0]+2,p[1]+2,fill='#2666ce',outline='');last=p
+        self.monitor_charts.request_draw()
 
     def poll(self):
         try:

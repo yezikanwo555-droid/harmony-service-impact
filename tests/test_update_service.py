@@ -4,7 +4,8 @@ from unittest.mock import patch
 import update_service as u
 
 REPO='example/service-impact';BODY=b'verified release data'
-def release(version='2.1.0'):
+def release(version=None):
+    if version is None:version=str(u.version_tuple(u.app_meta.VERSION)[0]+1)+'.0.0'
     name='ServiceImpact-'+version+'-windows-x64.zip'
     return dict(tag_name='v'+version,draft=False,prerelease=False,body='Release notes',assets=[dict(name=name,state='uploaded',size=len(BODY),digest='sha256:'+hashlib.sha256(BODY).hexdigest(),
         browser_download_url='https://github.com/'+REPO+'/releases/download/v'+version+'/'+name,url='https://api.github.com/repos/'+REPO+'/releases/assets/123')])

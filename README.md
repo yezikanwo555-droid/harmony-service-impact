@@ -7,6 +7,7 @@
 ## 能做什么
 
 - 冷启动、热启动、CPU、PSS 内存、APP/HAP 包文件大小对比。
+- 实时 CPU / PSS / 可读缓存目录曲线，支持时间窗口、联动读数、键盘逐点查看和暂停画面；采集不受暂停查看影响。
 - 自动读取系统存储页中的应用缓存，记录测试前后大小与增长量，不修改正式包。
 - 读取当前前台应用包名；可配置次数、采样间隔、日志目录。
 - 受控随机 Monkey，可设置时间、事件上限、间隔和种子。
@@ -37,6 +38,10 @@
 
 ## 更新与本地数据
 
+“实时监控”默认显示曲线，可切换最近 60 秒、最近 5 分钟或全部数据。悬停或聚焦图表后使用左右方向键查看读数，Home/End 跳到首尾点。切换“采样明细”可核对原始值和错误原因。CPU 固定为整机容量 0–100%，内存与缓存分别使用从零开始的 MiB 坐标轴；缺失读数断开，不填零、不平滑。长序列按屏幕像素聚合绘制，保留区间极值，原始记录仍完整保存。
+
+“暂停查看”仅冻结曲线；顶部最新值、后台采集和采样明细继续更新。点击“继续实时”返回最新窗口。进入下一测试组时解除暂停并清空上一组曲线。系统存储页缓存显示测试前、测试后和增长量，不连接成连续曲线。
+
 “关于与更新”支持手动/启动时检查正式版本。新版 ZIP 校验通过后，关闭旧版、解压新版运行；不会自动覆盖或执行下载文件。
 
 设置保存在 `%LOCALAPPDATA%\ServiceImpact\impact_settings.json`，更新下载在其 `updates` 子目录，测试结果保存在自选目录。首次从旧版升级时，可以把旧 `impact_settings.json` 放在新 EXE 旁；尚无新版设置时会读取并迁移。GitHub 仓库只包含源码、合成测试和说明，不包含业务包、实测日志或凭据。检查更新仅请求 Release 信息，不上传采集结果。
@@ -60,3 +65,5 @@ python scripts/build_release.py
 修改 `src/app_meta.py` 的 VERSION，更新 `CHANGELOG.md`，运行测试并构建。将代码推送到仓库，在 GitHub 创建同版本正式 Release（如 `v2.0.1`），上传 ZIP 和 SHA256SUMS。待 ZIP 上传完整后发布 Release。更新客户端读取 GitHub 资产的 SHA256 digest；没有有效校验信息时会拒绝下载。
 
 代码结构：`src/impact_app.py` 为控制器，`desktop_view.py` 为界面，`impact_engine.py` 为采集与报告，`comparison_job.py` 为两组调度，`network_session.py` 为网络恢复，`update_service.py` 为更新校验。
+
+图表交互设计参考 [UI UX Pro Max skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) 的时序图、数据表替代视图、键盘操作和可见焦点规范。图表实现使用 Tkinter Canvas，不引入前端框架或第三方绘图库。

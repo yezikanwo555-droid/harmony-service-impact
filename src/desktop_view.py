@@ -21,14 +21,14 @@ def setup_style(app):
     s.configure('TFrame',background=BG)
     s.configure('Card.TFrame',background='white',bordercolor='#e4e9f2')
     s.configure('White.TFrame',background='white')
-    for name,color,size,weight in [('Card.TLabel',INK,10,'normal'),('CardTitle.TLabel',INK,13,'bold'),('MutedCard.TLabel',MUTED,9,'normal'),('Metric.TLabel',INK,25,'bold')]:
+    for name,color,size,weight in [('Card.TLabel',INK,10,'normal'),('CardTitle.TLabel',INK,13,'bold'),('MutedCard.TLabel',MUTED,9,'normal'),('Metric.TLabel',INK,20,'bold')]:
         s.configure(name,background='white',foreground=color,font=('Microsoft YaHei UI',size,weight))
     s.configure('White.TLabel',background='white')
     s.configure('TLabel',background=BG)
     s.configure('TEntry',padding=(10,8),fieldbackground='white',bordercolor='#dce2ed',lightcolor='#dce2ed',darkcolor='#dce2ed')
     s.configure('TCombobox',padding=7,fieldbackground='white',arrowcolor=MUTED,bordercolor='#dce2ed')
     s.map('TCombobox',fieldbackground=[('readonly','white')],foreground=[('readonly',INK)])
-    s.configure('TButton',padding=(15,9),background='#e9edf8',foreground='#354766',borderwidth=0,focuscolor='none')
+    s.configure('TButton',padding=(15,9),background='#e9edf8',foreground='#354766',borderwidth=0,focuscolor=ACCENT)
     s.map('TButton',background=[('active','#dde4f4'),('disabled','#eef1f7')],foreground=[('disabled','#94a3b8')])
     s.configure('Primary.TButton',background=ACCENT,foreground='white',font=('Microsoft YaHei UI',10,'bold'))
     s.map('Primary.TButton',background=[('active','#4338ca'),('disabled','#c2c5e9')],foreground=[('disabled','#ffffff')])
@@ -137,11 +137,10 @@ def build(app):
     # Monitoring workspace.
     monitor=pages[1];metrics=ttk.Frame(monitor);metrics.pack(fill='x',pady=(0,16))
     for col,(text,var) in enumerate([('应用 CPU · 整机容量',app.cpu),('应用 PSS 内存',app.memory),('应用磁盘缓存',app.cache)]):
-        metrics.columnconfigure(col,weight=1,uniform='metric');f=ttk.Frame(metrics,style='Card.TFrame',padding=20);f.grid(row=0,column=col,sticky='ew',padx=(0,10))
+        metrics.columnconfigure(col,weight=1,uniform='metric');f=ttk.Frame(metrics,style='Card.TFrame',padding=(18,10));f.grid(row=0,column=col,sticky='ew',padx=(0,10))
         label(f,text,'MutedCard.TLabel').pack(anchor='w');ttk.Label(f,textvariable=var,style='Metric.TLabel').pack(anchor='w',pady=(10,0))
-    app.cache_chart=tk.Canvas(monitor,height=145,bg='white',highlightthickness=0);app.cache_chart.pack(fill='x',pady=(0,16));app.cache_chart.bind('<Configure>',lambda e:app.draw_cache())
-    app.resource_table=table(monitor,[('sec','经过 / 秒',80),('cpu','CPU %',90),('memory','PSS MiB',110),('cache','缓存 MiB',110),('note','采样说明',350)])
-    ttk.Label(monitor,text='缓存按系统页面读取测试前后快照，读取失败不会计为 0。',foreground=MUTED).pack(anchor='w',pady=10)
+    from monitor_charts import MonitorCharts
+    app.monitor_charts=MonitorCharts(monitor,app);app.monitor_charts.pack(fill='both',expand=True)
     # Comparison workspace.
     compare=pages[2];action=ttk.Frame(compare);action.pack(fill='x',pady=(0,12))
     ttk.Label(action,text='关注阈值 %').pack(side='left');entry=ttk.Entry(action,textvariable=app.v['threshold'],width=7);entry.pack(side='left',padx=10);app.controls.append(entry)

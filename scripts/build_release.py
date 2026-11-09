@@ -12,12 +12,13 @@ def main():
     if sys.platform!='win32':raise SystemExit('Build the Windows package on Windows.')
     meta=runpy.run_path(str(ROOT/'src/app_meta.py'))
     dist=ROOT/'dist';dist.mkdir(exist_ok=True)
+    binary_dir=dist/('v'+meta['VERSION'])
     subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onefile','--windowed',
-                    '--name','ServiceImpact','--distpath',str(dist),'--workpath',str(ROOT/'build'),
+                    '--name','ServiceImpact','--distpath',str(binary_dir),'--workpath',str(ROOT/'build'),
                     '--specpath',str(ROOT/'build'),'--paths',str(ROOT/'src'),str(ROOT/'src/impact_app.py')],check=True,cwd=ROOT)
     package=dist/meta['ASSET_TEMPLATE'].format(version=meta['VERSION'])
     with zipfile.ZipFile(package,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
-        z.write(dist/'ServiceImpact.exe','ServiceImpact.exe')
+        z.write(binary_dir/'ServiceImpact.exe','ServiceImpact.exe')
         for name in ('README.md','CHANGELOG.md','docs/使用说明.txt','docs/网络环境说明.txt'):
             z.write(ROOT/name,name)
     digest=hashlib.sha256(package.read_bytes()).hexdigest()
