@@ -191,6 +191,7 @@ def collect(config, events, cancel):
     network=None
     network_session=None
     traffic=None
+    diagnostics=None
     try:
         core.identifier(config['bundle'])
         mode=test_mode(config)
@@ -199,7 +200,7 @@ def collect(config, events, cancel):
         (out / 'logs').mkdir(parents=True)
         data = {'schema': SCHEMA, 'role': config['role'], 'label': config['label'], 'config': config,
                 'started_at': core.timestamp(), 'state': 'running', 'error': '', 'startup': [], 'resources': [],
-                'artifact': {'status': 'missing'}, 'environment': {}, 'cache': {}, 'monkey':{'status':'not_selected'},
+                'artifact': {'status': 'missing'}, 'environment': {}, 'cache': {}, 'monkey':{'status':'not_selected'}, 'diagnostics':{'status':'not_selected'},
                 'metric_definition': {'cpu': '同 UID 可见进程 CPU 累计时间差 / 整机全部 CPU 时间差，整机容量百分比（0～100）',
                                       'memory': '同 UID 可见进程 hidumper PSS Total 之和，MiB',
                                       'cache': '指定 cache 目录 du -sk 磁盘占用，MiB；不代表所有应用数据',
@@ -311,6 +312,10 @@ def collect(config, events, cancel):
         began = time.monotonic()
         duration, interval = float(config['duration']), float(config['interval'])
         if use_monkey:
+            from monkey_diagnostics import Session as DiagnosticSession
+            diagnostics=DiagnosticSession(hdc,args.bundle,uid,process,out/'logs',emit)
+            data['diagnostics']={'status':'running'}
+            diagnostics.start()
             monkey=MonkeySession(hdc,config,out/'logs',cancel)
             data['monkey']={'status':'running'}
             save_json(out/'result.json',data)
@@ -355,6 +360,9 @@ def collect(config, events, cancel):
         traffic_raw=[];final_traffic=traffic.sample('end',traffic_raw);data['traffic']=traffic.summary()
         save_json(out/'logs'/'traffic_end.json',traffic_raw)
         emit('traffic_summary',data['traffic'])
+        if diagnostics:
+            emit('phase','正在保存 Monkey 系统日志并核对故障记录…')
+            data['diagnostics']=diagnostics.finish(data.get('monkey'))
         if page_cache:snapshot('end')
         if network:network.checkpoint('end',probe=True)
         data['state'] = 'error' if use_monkey and data['monkey']['status']!='complete' else 'complete'
@@ -370,6 +378,16 @@ def collect(config, events, cancel):
             data['state'], data['error'] = 'error', str(exc)
         emit('log', '采集失败：' + str(exc))
     finally:
+        if diagnostics:
+            try:
+                # Log capture must stop even if Monkey's own log writer fails during finish().
+                monkey_result=dict(data.get('monkey',{}))
+                if monkey:
+                    monkey_result=monkey.result or dict(monkey_result,stop_reason=monkey.error or data.get('error') or ('用户停止' if cancel.is_set() else ''),actual_events=monkey.actual)
+                data['diagnostics']=diagnostics.finish(monkey_result)
+            except Exception as exc:
+                data['diagnostics']={'status':'partial','errors':['日志收尾失败：'+str(exc)],'incidents':diagnostics.incidents}
+                emit('log','系统日志收尾失败：'+str(exc))
         if network_session:
             try:data['network_restore']=network_session.finish()
             except Exception as exc:
@@ -405,6 +423,10 @@ def load_result(path):
         raise ValueError('结果结构不完整，请选择未经修改的采集文件或报告快照')
     if 'traffic' in data and (not isinstance(data['traffic'],dict) or not isinstance(data['traffic'].get('errors',[]),list)):
         raise ValueError('流量记录结构不完整')
+    if 'diagnostics' in data:
+        d=data['diagnostics']
+        if not isinstance(d,dict) or not isinstance(d.get('incidents',[]),list) or any(not isinstance(i,dict) or not isinstance(i.get('confirmed'),bool) for i in d.get('incidents',[])) or not isinstance(d.get('errors',[]),list) or any(not isinstance(error,str) for error in d.get('errors',[])) or not isinstance(d.get('hilog',{}),dict):
+            raise ValueError('稳定性日志结构不完整')
     return data
 
 
@@ -468,6 +490,15 @@ def comparison(before, after, threshold=10):
         raise ValueError('关注阈值必须是非负有限数值')
     a, b = summarize(before), summarize(after)
     warnings, notes = [], []
+    confirmed=False;suspected=False
+    for label,d in [('改造前',before),('改造后',after)]:
+        if test_mode(d['config']) not in ('monkey','both_monkey'):continue
+        diagnostic=d.get('diagnostics',{})
+        for incident in diagnostic.get('incidents',[]):
+            if incident.get('confirmed'):
+                confirmed=True;warnings.append(label+'存在系统故障日志确认的崩溃 / AppFreeze，请查看稳定性异常明细')
+            else:suspected=True;warnings.append(label+'存在疑似无响应记录，需核查设备与操作日志')
+        if diagnostic.get('status')!='complete':warnings.append(label+'系统 / 故障日志覆盖不完整，不能据此认定未崩溃或未卡死')
     warnings.extend(network_env.warnings(before,after))
     ma,mb=test_mode(before['config']),test_mode(after['config'])
     if ma!=mb:warnings.append('测试方式不同，未选择的项目不可直接对比')
@@ -547,6 +578,8 @@ def comparison(before, after, threshold=10):
     if missing:
         warnings.append('存在缺失或口径不同的指标，不能给出完整影响结论')
     conclusion = '需补充验证' if warnings else ('存在需关注的指标增幅' if any(r['status'] == '需关注' for r in rows) else '本次监测指标未超过关注阈值')
+    if confirmed:conclusion='发现已确认的崩溃或应用无响应'
+    elif suspected:conclusion='发现疑似无响应，需核查'
     return {'rows': rows, 'warnings': warnings, 'notes':notes, 'conclusion': conclusion, 'threshold_pct': threshold,
             'before_summary': a, 'after_summary': b}
 
@@ -635,7 +668,8 @@ def report(before, after, output_dir, threshold=10):
         restore=d.get('network_restore')
         if restore:network_details+='<p>环境恢复：'+esc({'restored':'已恢复原设置','restore_failed':'恢复失败，请点击恢复上次环境'}.get(restore.get('state'),restore.get('state')))+' '+esc(restore.get('error',''))+'</p>'
     network_details+='</section>'
-    details=mode_details+'</section>'+network_details+details
+    from monkey_diagnostics import report_section
+    details=report_section(before,after)+mode_details+'</section>'+network_details+details
     document=document.replace('<section><h2>口径与限制</h2>',details+'<section><h2>口径与限制</h2>')
     document=document.replace('自动缓存仅覆盖指定 cache 目录。','目录模式仅覆盖指定 cache 目录；系统页面模式采用系统缓存分类。')
     (root/'report.html').write_text(document,encoding='utf-8')

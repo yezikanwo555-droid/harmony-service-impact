@@ -120,7 +120,8 @@ def build(app):
         monkey.columnconfigure(col,weight=1);label(monkey,text,'MutedCard.TLabel').grid(row=0,column=col,sticky='w');app.entry(monkey,app.v[key],1,col,width=8)
     app.monkey_in_app_check=ttk.Checkbutton(monkey,text='应用内模式：关闭随机返回，操作后检查；跳出自动拉回，失败停止',variable=app.v['monkey_in_app'],onvalue='1',offvalue='0')
     app.monkey_in_app_check.grid(row=2,column=0,columnspan=4,sticky='w',pady=(2,6));app.controls.append(app.monkey_in_app_check)
-    label(monkey,'事件次数或时长先到即停。随机操作可能触发业务，请使用测试账号。','MutedCard.TLabel').grid(row=3,column=0,columnspan=4,sticky='w',pady=(0,10))
+    label(monkey,'自动保存系统及故障日志，报告标记崩溃 / 无响应。日志仅存本机。','MutedCard.TLabel').grid(row=3,column=0,columnspan=4,sticky='w',pady=(0,4))
+    label(monkey,'事件次数或时长先到即停。随机操作可能触发业务，请使用测试账号。','MutedCard.TLabel').grid(row=4,column=0,columnspan=4,sticky='w',pady=(0,10))
     def mode_changed(*a):
         if 'Monkey' in app.v['test_mode'].get():monkey.grid()
         else:monkey.grid_remove()
