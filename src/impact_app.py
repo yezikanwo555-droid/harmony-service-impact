@@ -36,6 +36,7 @@ class App(UpdateMixin,tk.Tk):
         self.batch_running = False
         self.last_out, self.last_report = None, None
         self.datasets = {}
+        self.live_role = None
         self.controls = []
         self.sample_rows = []
         self.cache_snapshots = []
@@ -51,7 +52,7 @@ class App(UpdateMixin,tk.Tk):
         defaults = dict(count='10', duration='60', interval='5', settle='3',
                         scenario='首页停留', out=str(BASE/'results'), threshold='10', hdc='', target='',
                         cache_mode='系统页面：测试前后自动读取',storage_unit_base='1000',test_mode='冷热启动',
-                        monkey_seconds='60',monkey_events='100',monkey_interval_ms='500',monkey_seed='42',
+                        monkey_seconds='60',monkey_events='100',monkey_interval_ms='500',monkey_seed='42',monkey_in_app='1',
                         network_mode='当前网络（只记录）',network_reqable_preset='较慢',network_ping_host='',
                         network_reqable_dir=network_env.default_config_dir(),network_api_port='9090',network_proxy_host='')
         self.v = {k:tk.StringVar(value=str(saved.get(k,v))) for k,v in defaults.items()}
@@ -74,6 +75,7 @@ class App(UpdateMixin,tk.Tk):
         self.state_text = tk.StringVar(value='填写两个已安装包名，选择测试方式，点击一键对比自动测试并生成报告。')
         self.summary_text = tk.StringVar(value='等待两组数据')
         self.cpu, self.memory, self.cache = [tk.StringVar(value='—') for _ in range(3)]
+        self.traffic_text=tk.StringVar(value='应用 UID 流量：等待采集 · 显示上传 / 下载速率及累计消耗')
         self.init_updates(saved)
         self.build_ui()
         if self.update_auto.get() and self.update_repo.get():self.after(1800,lambda:self.check_updates(quiet=True))
@@ -119,6 +121,7 @@ class App(UpdateMixin,tk.Tk):
         return c
 
     def network_action(self,action):
+        if self.update_busy:return
         if self.worker and self.worker.is_alive():return
         try:c=self.network_config(strict=False)
         except ValueError as exc:messagebox.showerror('网络设置',str(exc),parent=self);return
@@ -159,6 +162,7 @@ class App(UpdateMixin,tk.Tk):
         win.protocol('WM_DELETE_WINDOW',close)
 
     def detect_bundle(self,role):
+        if self.update_busy:return
         if self.worker and self.worker.is_alive():return
         config={key:self.v[key].get().strip() for key in ('hdc','target')}
         self.cancel=threading.Event()
@@ -206,6 +210,7 @@ class App(UpdateMixin,tk.Tk):
         return {'update_repository':self.update_repo.get(),'update_auto':self.update_auto.get(),**{k:v.get() for k,v in self.v.items()},**{role:{k:v.get() for k,v in vals.items()} for role,vals in self.group.items()}}
 
     def start(self,role):
+        if self.update_busy:return
         if self.worker and self.worker.is_alive():return
         try:
             c=self.get_config(role)
@@ -254,15 +259,19 @@ class App(UpdateMixin,tk.Tk):
         return c
 
     def prepare_live(self,c):
+        self.live_role=c['role'];self.datasets.pop(c['role'],None)
         self.sample_rows=[];self.cache_snapshots=[]
         self.page_cache_active=c['cache_mode']=='system_ui'
         self.monitor_charts.reset(c)
+        self.pair_charts.reset()
         self.cpu.set('—'); self.memory.set('—'); self.cache.set('—')
+        self.traffic_text.set('应用 UID 流量：等待当前组有效基线；历史累计计数不会作为本轮消耗。')
         self.resource_table.delete(*self.resource_table.get_children()); self.draw_cache()
         self.state_text.set('正在采集'+('改造前' if c['role']=='before' else '改造后')+'：'+c['bundle'])
         self.tabs.select(1)
 
     def start_batch(self):
+        if self.update_busy:return
         if self.worker and self.worker.is_alive():return
         try:
             configs=[self.get_config(role) for role in ('before','after')]
@@ -288,12 +297,24 @@ class App(UpdateMixin,tk.Tk):
 
     def draw_cache(self):
         self.monitor_charts.request_draw()
+        self.monitor_charts.pair.request_draw()
+        self.pair_charts.request_draw()
+
+    def chart_datasets(self):
+        data=dict(self.datasets)
+        if self.live_role:
+            data[self.live_role]={'resources':self.sample_rows,
+                'environment':{'bundle':self.group[self.live_role]['bundle'].get()},
+                'cache':{'source':'system_storage_page' if self.page_cache_active else 'directory','checkpoints':self.cache_snapshots}}
+        return data
 
     def poll(self):
         try:
             while True:
                 kind,value=self.events.get_nowait()
-                if kind=='update_done':self.update_complete(value)
+                if kind=='update_done':
+                    self.update_complete(value)
+                    if self.installing:return
                 elif kind=='update_progress':self.update_progress.set(value)
                 elif kind=='log':self.append_log(value)
                 elif kind=='out':self.last_out=value
@@ -324,6 +345,7 @@ class App(UpdateMixin,tk.Tk):
                         if group['bundle'].get().strip()!=result['bundle']:
                             for key in ('ability','module','cache_path','artifact','cache_start','cache_end','result'):group[key].set('')
                             self.datasets.pop(role,None)
+                            self.draw_cache()
                             self.compare_table.delete(*self.compare_table.get_children())
                             self.summary_text.set('目标包已更新，请重新采集该组数据')
                             self.last_report=None
@@ -341,14 +363,17 @@ class App(UpdateMixin,tk.Tk):
                     self.cache.set(value['raw_text'] if value['status']=='ok' else '页面读取失败')
                     self.draw_cache()
                 elif kind=='resource':
+                    from traffic_monitor import size
+                    self.traffic_text.set('当前组流量：上传 '+size(value.get('traffic_upload_bytes'))+' / 下载 '+size(value.get('traffic_download_bytes'))+' / 合计 '+size(value.get('traffic_total_bytes'))+'；速率 ↑ '+engine.fmt(value.get('upload_kib_s'))+' / ↓ '+engine.fmt(value.get('download_kib_s'))+' KiB/s'+('；'+value['traffic_note'] if value.get('traffic_note') else ''))
                     self.sample_rows.append(value)
                     self.cpu.set(engine.fmt(value['cpu_pct'])+' %' if value['cpu_pct'] is not None else '等待 / 不可用')
                     self.memory.set(engine.fmt(value['pss_mib'])+' MiB' if value['pss_mib'] is not None else '不可用')
                     if not self.page_cache_active:self.cache.set(engine.fmt(value['cache_mib'])+' MiB' if value['cache_mib'] is not None else '无法自动读取')
-                    note='；'.join(filter(None,[value['cpu_note'],value['memory_note'],value['cache_note']]))
+                    note='；'.join(filter(None,[value.get('cpu_note'),value.get('memory_note'),value.get('cache_note'),value.get('traffic_note')]))
                     self.resource_table.insert('', 'end', values=(engine.fmt(value['elapsed_s']),engine.fmt(value['cpu_pct']),engine.fmt(value['pss_mib']),engine.fmt(value['cache_mib']),note))
                     self.resource_table.yview_moveto(1); self.draw_cache()
                 elif kind in ('done','group_done'):
+                    self.live_role=None
                     if kind=='done':
                         for w in self.controls:w.configure(state='readonly' if isinstance(w,ttk.Combobox) else 'normal')
                         self.stop_button.configure(state='disabled')
@@ -361,7 +386,11 @@ class App(UpdateMixin,tk.Tk):
                         self.refresh_compare(silent=True)
                     else:self.state_text.set('采集失败，请查看日志')
                     if self.closing and kind=='done':self.destroy();return
+                elif kind=='traffic_summary':
+                    from traffic_monitor import size
+                    self.traffic_text.set('本组消耗：上传 '+size(value.get('upload_bytes'))+' / 下载 '+size(value.get('download_bytes'))+' / 合计 '+size(value.get('total_bytes'))+'；'+value.get('coverage','覆盖范围未知'))
                 elif kind=='batch_done':
+                    self.live_role=None
                     self.batch_running=False
                     for w in self.controls:w.configure(state='readonly' if isinstance(w,ttk.Combobox) else 'normal')
                     self.stop_button.configure(state='disabled')
@@ -378,10 +407,13 @@ class App(UpdateMixin,tk.Tk):
         self.after(120,self.poll)
 
     def import_result(self,role):
+        if self.worker and self.worker.is_alive():return
         path=filedialog.askopenfilename(parent=self,title='选择 '+role+' 的 result.json',filetypes=[('采集结果','*.json')])
         if not path:return
         try:
             data=engine.load_result(path);self.datasets[role]=data;self.group[role]['result'].set(path)
+            self.live_role=None
+            self.monitor_charts.pair.reset();self.pair_charts.reset()
             self.group[role]['bundle'].set(data['environment'].get('bundle',''))
             self.group[role]['label'].set(data.get('label',role))
             for key in ('ability','module','cache_path'):
@@ -392,6 +424,7 @@ class App(UpdateMixin,tk.Tk):
         except (ValueError,OSError,KeyError,TypeError) as exc:messagebox.showerror('无法导入',str(exc),parent=self)
 
     def refresh_compare(self,silent=False):
+        self.draw_cache()
         if 'before' not in self.datasets or 'after' not in self.datasets:
             self.summary_text.set('请先采集或导入改造前、改造后两组 result.json。')
             if not silent:messagebox.showinfo('缺少数据',self.summary_text.get(),parent=self)
@@ -435,6 +468,9 @@ class App(UpdateMixin,tk.Tk):
 
 
 if __name__=='__main__':
+    if len(sys.argv)==3 and sys.argv[1]=='--apply-update':
+        import update_installer
+        raise SystemExit(update_installer.main(sys.argv[2]))
     if os.name=='nt':
         try:
             import ctypes

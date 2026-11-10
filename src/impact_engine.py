@@ -190,6 +190,7 @@ def collect(config, events, cancel):
     monkey=None
     network=None
     network_session=None
+    traffic=None
     try:
         core.identifier(config['bundle'])
         mode=test_mode(config)
@@ -272,6 +273,11 @@ def collect(config, events, cancel):
             emit('log',('测试前' if stage=='start' else '测试后')+'缓存：'+(point['raw_text'] if point['status']=='ok' else '不可用，'+point.get('error','')))
         if page_cache:snapshot('start')
         if network:network.checkpoint('before_tests')
+        from traffic_monitor import Tracker
+        traffic=Tracker(hdc,uid)
+        traffic_raw=[];traffic.sample('before_tests',traffic_raw)
+        save_json(out/'logs'/'traffic_start.json',traffic_raw)
+        data['traffic']=traffic.summary()
         if startup_modes(config):
             if '-W' not in hdc.shell('aa', 'start', '-h'):
                 raise ValueError('设备不支持 aa start -W')
@@ -300,6 +306,8 @@ def collect(config, events, cancel):
         emit('log', ('Monkey 资源监控开始，请勿手动操作手机。场景：' if use_monkey else '资源监控开始：请按两版相同的操作步骤使用元服务。当前场景：') + config['scenario'])
         emit('phase', '资源监控中；结束后自动读取缓存' if page_cache else '资源与缓存监控中')
         monitor = ResourceMonitor(hdc, args.bundle, uid, cache_path, page_cache=page_cache)
+        traffic_raw=[];traffic.sample('resources_start',traffic_raw)
+        save_json(out/'logs'/'traffic_resources_start.json',traffic_raw)
         began = time.monotonic()
         duration, interval = float(config['duration']), float(config['interval'])
         if use_monkey:
@@ -322,6 +330,7 @@ def collect(config, events, cancel):
                     if time.monotonic()<next_sample:continue
                 raw = []
                 row = monitor.sample(time.monotonic() - began, raw)
+                row.update(traffic.sample('resource',raw));data['traffic']=traffic.summary()
                 i += 1
                 resource_rows.append(row)
                 if writer is None:
@@ -343,12 +352,16 @@ def collect(config, events, cancel):
             data['monkey']=monkey.finish()
             save_json(out/'logs'/'monkey_summary.json',data['monkey'])
             emit('log','Monkey：'+data['monkey']['stop_reason'])
+        traffic_raw=[];final_traffic=traffic.sample('end',traffic_raw);data['traffic']=traffic.summary()
+        save_json(out/'logs'/'traffic_end.json',traffic_raw)
+        emit('traffic_summary',data['traffic'])
         if page_cache:snapshot('end')
         if network:network.checkpoint('end',probe=True)
         data['state'] = 'error' if use_monkey and data['monkey']['status']!='complete' else 'complete'
         if data['state']=='error':data['error']=data['monkey']['stop_reason']
         emit('log', '本组采集结束：'+data['state'])
     except KeyboardInterrupt:
+        if data and traffic:data['traffic']=traffic.summary()
         if data:
             data['state'] = 'interrupted'
         emit('log', '已停止，保留已采集数据。')
@@ -372,6 +385,7 @@ def collect(config, events, cancel):
                 data['monkey']={'status':'error','stop_reason':'Monkey 收尾失败：'+str(exc)}
                 data['state'],data['error']='error',data['monkey']['stop_reason']
         if out and data:
+            if traffic:data['traffic']=traffic.summary()
             data['finished_at'] = core.timestamp()
             try:
                 save_json(out / 'result.json', data)
@@ -389,6 +403,8 @@ def load_result(path):
         raise ValueError('结果结构不完整')
     if any(not isinstance(data.get(k), dict) for k in ('environment', 'config', 'artifact', 'cache')) or any(not isinstance(row,dict) for k in ('startup','resources') for row in data[k]) or any(k not in data for k in ('role','label','state')):
         raise ValueError('结果结构不完整，请选择未经修改的采集文件或报告快照')
+    if 'traffic' in data and (not isinstance(data['traffic'],dict) or not isinstance(data['traffic'].get('errors',[]),list)):
+        raise ValueError('流量记录结构不完整')
     return data
 
 
@@ -424,6 +440,9 @@ def summarize(data):
         result.update(cache_start=start, cache_end=end, cache_peak=None, cache_growth=end-start, cache_source='人工补录系统缓存读数')
     else:
         result.update(cache_start=None, cache_end=None, cache_peak=None, cache_growth=None, cache_source='不可用')
+    traffic=data.get('traffic',{})
+    for key,field in [('traffic_upload_mib','upload_bytes'),('traffic_download_mib','download_bytes'),('traffic_total_mib','total_bytes')]:
+        value=traffic.get(field);result[key]=value/MIB if finite(value) else None
     result['package_mib'] = data.get('artifact', {}).get('mib') if data.get('artifact', {}).get('status') == 'ok' else None
     return result
 
@@ -433,7 +452,8 @@ METRICS = [('cold_mean', '冷启动平均', 'ms'), ('cold_p95', '冷启动 P95',
            ('package_mib', '本地包文件大小', 'MiB'), ('cpu_pct_mean', '应用 CPU 平均（整机容量）', '%'),
            ('cpu_pct_peak', '应用 CPU 采样峰值', '%'), ('pss_mib_mean', '应用 PSS 平均', 'MiB'),
            ('pss_mib_peak', '应用 PSS 采样峰值', 'MiB'), ('cache_start', '采集开始缓存', 'MiB'),
-           ('cache_end', '采集结束缓存', 'MiB'), ('cache_growth', '采集期间缓存增长', 'MiB')]
+           ('cache_end', '采集结束缓存', 'MiB'), ('cache_growth', '采集期间缓存增长', 'MiB'),
+           ('traffic_upload_mib','应用上传消耗','MiB'),('traffic_download_mib','应用下载消耗','MiB'),('traffic_total_mib','应用合计流量消耗','MiB')]
 
 
 def cache_location(data):
@@ -452,6 +472,8 @@ def comparison(before, after, threshold=10):
     ma,mb=test_mode(before['config']),test_mode(after['config'])
     if ma!=mb:warnings.append('测试方式不同，未选择的项目不可直接对比')
     if any(m in ('monkey','both_monkey') for m in (ma,mb)):
+        from monkey_runner import in_app_mode
+        if in_app_mode(before['config'])!=in_app_mode(after['config']):warnings.append('Monkey 应用内模式不同，事件分布与恢复策略不一致')
         for key in ('monkey_seconds','monkey_events','monkey_interval_ms','monkey_seed'):
             if before['config'].get(key)!=after['config'].get(key):warnings.append('Monkey 参数不同：'+key)
         for label,d in [('改造前',before),('改造后',after)]:
@@ -470,7 +492,7 @@ def comparison(before, after, threshold=10):
     elif ea['bundle'] != eb['bundle']:
         notes.append('本次为两个不同包名的对比；需确认它们对应改造前后同一业务，并保持登录态、配置和初始数据可比')
         if ea.get('uid') is not None and ea.get('uid')==eb.get('uid'):
-            warnings.append('两个包共享 UID，CPU/内存可能汇总双方进程，不能直接作为各包独立占用')
+            warnings.append('两个包共享 UID，CPU/内存/流量可能汇总双方，不能作为各包独立占用')
     for key, label in [('scenario', '操作场景'), ('duration', '监控时长'), ('interval', '采样间隔'), ('count', '启动轮数'), ('settle', '稳定等待'), ('monitor_only', '采集模式')]:
         if before['config'].get(key) != after['config'].get(key):
             warnings.append(label + '不一致')
@@ -501,6 +523,8 @@ def comparison(before, after, threshold=10):
     if cache_incompatible:warnings.append('系统存储页单位换算基数不同，不宜直接比较')
     if finite(a['cache_start']) and finite(b['cache_start']) and abs(a['cache_start']-b['cache_start']) > max(1, abs(a['cache_start'])*.05):
         warnings.append('监控开始时缓存占用不同，缓存与资源变化可能受初始数据影响')
+    for label,d in [('改造前',before),('改造后',after)]:
+        if d.get('traffic',{}).get('status')!='complete':warnings.append(label+'流量覆盖不完整或不可用，不能据此判断整轮流量变化')
     rows = []
     for key, label, unit in METRICS:
         x, y = a.get(key), b.get(key)
@@ -508,6 +532,7 @@ def comparison(before, after, threshold=10):
         pct = delta / x * 100 if delta is not None and x > 0 else None
         incompatible = (key == 'package_mib' and before.get('artifact', {}).get('format') != after.get('artifact', {}).get('format')) or (key.startswith('cache_') and (a['cache_source'] != b['cache_source'] or cache_location(before) != cache_location(after)))
         if key.startswith('cache_') and cache_incompatible:incompatible=True
+        if key.startswith('traffic_') and any(d.get('traffic',{}).get('status')!='complete' for d in (before,after)):incompatible=True
         status = '口径不同' if incompatible else ('缺少数据' if delta is None else ('需关注' if (pct is not None and pct > threshold) or (x == 0 and y > 0) else '未超过关注阈值'))
         launch_mode='cold' if key.startswith('cold_') else 'hot' if key.startswith('hot_') else None
         if launch_mode and all(launch_mode not in startup_modes(d['config']) for d in (before,after)):
@@ -533,33 +558,8 @@ def fmt(value, signed=False):
 
 
 def chart(before, after, key, title):
-    series = [before.get('resources', []), after.get('resources', [])]
-    points = [(r.get('elapsed_s'), r.get(key)) for rows in series for r in rows if finite(r.get('elapsed_s')) and finite(r.get(key))]
-    if not points:
-        if key=='cache_mib' and any(d.get('cache',{}).get('source')=='system_storage_page' for d in (before,after)):
-            return '<p>系统存储页仅在测试前后读取，不绘制连续曲线。原始读数、时间及增长量见下方快照记录。</p>'
-        return '<p>无自动采样数据。人工缓存读数不绘制为连续曲线。</p>'
-    xmax = max(1, max(p[0] for p in points))
-    ymax = max(1, max(p[1] for p in points)) * 1.1
-    svg = '<svg viewBox="0 0 700 205" role="img" aria-label="%s"><path d="M50 12V172H680" fill="none" stroke="#c4cfdf"/>' % html.escape(title)
-    for fraction in (0, .5, 1):
-        y = 172 - fraction * 150
-        svg += '<text x="45" y="%.1f" text-anchor="end" font-size="11">%.1f</text>' % (y+4, ymax*fraction)
-    svg += '<text x="50" y="193" font-size="11">0 秒</text><text x="620" y="193" font-size="11">%.1f 秒</text>' % xmax
-    for rows, color in zip(series, ['#3270da', '#df7a20']):
-        segment = []
-        def draw(points):
-            return '<polyline points="%s" fill="none" stroke="%s" stroke-width="2"/>' % (' '.join(points), color) if points else ''
-        for row in rows:
-            if not finite(row.get(key)) or not finite(row.get('elapsed_s')):
-                svg += draw(segment)
-                segment = []
-            else:
-                x, y = 50 + row['elapsed_s']/xmax*620, 172 - row[key]/ymax*150
-                segment.append('%.1f,%.1f' % (x,y))
-                svg += '<circle cx="%.1f" cy="%.1f" r="2" fill="%s"/>' % (x,y,color)
-        svg += draw(segment)
-    return svg + '</svg>'
+    from pair_charts import svg_chart
+    return svg_chart(before,after,key,title)
 
 
 def report(before, after, output_dir, threshold=10):
@@ -582,9 +582,13 @@ def report(before, after, output_dir, threshold=10):
     for name, data in [('改造前',before),('改造后',after)]:
         env, art = data['environment'], data.get('artifact',{})
         groups += '<section><h2>%s · %s</h2><p>安装版本：%s（%s） · 设备：%s<br>系统：%s<br>场景：%s<br>开始：%s<br>文件：%s · SHA256：<code>%s</code><br>缓存来源：%s<br>有效冷/热样本：%s / %s</p></section>' % (name,esc(data['label']),esc(env.get('version_name')),esc(env.get('version_code')),esc(env.get('device')),esc(env.get('system')),esc(data['config'].get('scenario')),esc(data.get('started_at')),esc(art.get('name','未提供')),esc(art.get('sha256','—')),esc(summarize(data)['cache_source']),summarize(data)['cold_n'],summarize(data)['hot_n'])
-    charts = ''.join('<section><h2>%s</h2><p class="legend">蓝：改造前　橙：改造后；横轴为监控阶段经过时间，断点表示数据缺失。</p>%s</section>' % (label,chart(before,after,key,label)) for key,label in [('cpu_pct','CPU · 整机容量 %'),('pss_mib','PSS 内存 · MiB'),('cache_mib','应用磁盘缓存 · MiB')])
+    charts = ''.join('<section><h2>%s</h2><p class="legend">蓝色实线：改造前　橙色虚线：改造后；同轴对比，断点表示数据缺失。</p>%s</section>' % (label,chart(before,after,key,label)) for key,label in [('cpu_pct','CPU · 整机容量 %'),('pss_mib','PSS 内存 · MiB'),('cache_mib','应用磁盘缓存 · MiB'),('upload_kib_s','应用上传速率 · KiB/s'),('download_kib_s','应用下载速率 · KiB/s'),('traffic_total_mib','累计流量消耗 · MiB')])
     document = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>元服务改造影响对比报告</title><style>body{font:15px/1.65 "Microsoft YaHei",sans-serif;background:#f3f6fa;color:#192a43;margin:0}main{max-width:1120px;margin:auto;padding:32px}h1{margin:0}h2{font-size:18px}section,.panel{background:white;padding:22px;margin:18px 0;border-radius:12px}.notice{border-left:5px solid #cf8b2f}table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:11px 8px;border-bottom:1px solid #e3e8ee;text-align:right}td:first-child,th:first-child{text-align:left}th{background:#eaf0f8}code{overflow-wrap:anywhere;font-size:11px}.legend{font-size:12px;color:#61718a}svg{width:100%;max-height:270px}button{padding:8px 16px;float:right}@media print{body{background:white}main{padding:0}button{display:none}section{break-inside:avoid}table{font-size:10px}}</style><main><button onclick="window.print()">打印 / 保存 PDF</button><h1>元服务改造影响对比报告</h1><p>''' + esc(before['environment'].get('bundle','')) + '''</p><div class="panel notice"><h2>''' + esc(c['conclusion']) + '''</h2><p>相对增幅关注阈值：''' + fmt(threshold) + '''%。这是观察提示，不是项目验收标准；缺失值不会当作 0。</p><ul>''' + warnings + '''</ul></div>''' + groups + '''<section><h2>指标对比</h2><p>差值＝改造后−改造前。CPU 差值单位为百分点。前值为 0 或负数时不计算变化率。</p><table><thead><tr><th>指标</th><th>单位</th><th>改造前</th><th>改造后</th><th>差值</th><th>变化率 %</th><th>提示</th></tr></thead><tbody>''' + table + '''</tbody></table></section>''' + charts + '''<section><h2>口径与限制</h2><ul><li>启动计时与资源监控分阶段执行，资源采样不与启动测量并行。冷启动到 UIAbility 首帧，热启动到恢复前台，不表示业务内容加载完成。</li><li>CPU 为同应用 UID 下可见进程的 CPU 时间增量占整机容量比例；进程集合变化或不可读的区间留空。内存为同 UID 可见进程的 PSS Total 合计。不同 UID 的隔离渲染进程可能不在范围内。</li><li>CPU 平均为有效采样区间占比的算术均值；PSS 为有效采样点均值，峰值仅为采样峰值。实际采样周期包含命令开销，不能捕捉所有瞬时峰值。</li><li>包体为所选本地 APP/HAP 的文件字节数，不是安装后占用，也不能单凭文件名证明与已安装版本一致。请选择同格式、同构建配置的对应产物。</li><li>自动缓存仅覆盖指定 cache 目录。权限不足或目录不存在显示不可用；人工读数单独标识，不绘制连续曲线。工具不清理缓存。</li><li>两版应使用同设备、同网络、同操作步骤与可比的初始数据、缓存及温度。工具不能自动验证用户操作、网络、温度和全部缓存初始条件一致。</li><li>本报告不验证埋点，不替代登录、导航、音乐播放、稳定性等业务回归。有限样本不能证明整个元服务无影响。</li></ul><p>计时与诊断依据：<a href="https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/aa-tool.md">aa 工具</a> · <a href="https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/dfx/hidumper.md">HiDumper</a></p></section></main></html>'''
-    details=''
+    details='<section><h2>应用流量消耗与覆盖范围</h2>'
+    for label,d in [('改造前',before),('改造后',after)]:
+        traffic=d.get('traffic',{})
+        details+='<h3>'+label+'</h3><p>统计来源：应用 UID；状态：'+esc(traffic.get('status','未记录'))+'；上传 / 下载 / 合计字节：'+esc(traffic.get('upload_bytes','—'))+' / '+esc(traffic.get('download_bytes','—'))+' / '+esc(traffic.get('total_bytes','—'))+'</p><p>覆盖：'+esc(traffic.get('coverage','未取得'))+'；起止：'+esc(traffic.get('started_at','—'))+' → '+esc(traffic.get('ended_at','—'))+'。'+esc(traffic.get('scope',''))+'</p><p>'+esc('；'.join(traffic.get('errors',[])))+'</p>'
+    details+='</section>'
     for label,data in [('改造前',before),('改造后',after)]:
         cache=data.get('cache',{})
         if cache.get('source')!='system_storage_page':continue
@@ -604,6 +608,8 @@ def report(before, after, output_dir, threshold=10):
         mode_details+='<h3>'+label+' · '+esc(TEST_NAMES[test_mode(d['config'])])+'</h3><p>采集状态：'+esc(d.get('state',''))+'；'+esc(d.get('error',''))+'</p>'
         if test_mode(d['config']) in ('monkey','both_monkey'):
             m=d.get('monkey',{});cfg=d['config']
+            from monkey_runner import in_app_mode
+            mode_details+='<p>应用内模式：'+('开启（禁用随机返回，操作后检查，越界拉回）' if in_app_mode(cfg) else '关闭')+'；拉回尝试：'+esc(m.get('foreground_recoveries','未记录'))+'；拉回成功：'+esc(m.get('foreground_recovery_successes','未记录'))+'。'+esc(m.get('event_mix',''))+'</p>'
             mode_details+='<p>种子：%s；最多事件：%s；最长：%s 秒；最小事件间隔：%s ms。<br>实际事件：%s；执行耗时（含前台检查与采样）：%s 秒；结束原因：%s。<br>执行器：UITest 逐条随机点击、滑动、返回。原始日志：各组 logs/monkey_events.jsonl 和 logs/monkey_summary.json。次数为确认注入成功的操作数，不代表业务成功；本工具不提供完整崩溃或 ANR 判定。达到时长或停止后不再发起新事件，正在执行的命令可能稍后返回。</p>' % tuple(map(esc,[cfg.get('monkey_seed'),cfg.get('monkey_events'),cfg.get('monkey_seconds'),cfg.get('monkey_interval_ms'),m.get('actual_events') if m.get('actual_events') is not None else '未取得',m.get('elapsed_s','—'),m.get('stop_reason','未执行')]))
     network_details='<section><h2>网络环境与校验记录</h2>'
     for label,d in [('改造前',before),('改造后',after)]:

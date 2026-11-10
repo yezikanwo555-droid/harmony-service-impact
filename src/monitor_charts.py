@@ -47,7 +47,7 @@ class MonitorCharts(ttk.Frame):
     def __init__(self,parent,app):
         super().__init__(parent);self.app=app
         self.frozen=None;self.pending=None;self.selected=None;self.visible=[];self.bounds={}
-        self.range=tk.StringVar(value='最近 5 分钟');self.view=tk.StringVar(value='曲线')
+        self.range=tk.StringVar(value='最近 5 分钟');self.view=tk.StringVar(value='双包对比')
         self.context=tk.StringVar(value='等待采集 · 当前组')
         self.detail=tk.StringVar(value='悬停查看读数，或聚焦图表后按 ← / →；缺失读数显示断点。')
         tools=ttk.Frame(self);tools.pack(fill='x',pady=(0,10))
@@ -55,7 +55,7 @@ class MonitorCharts(ttk.Frame):
         self.pause=ttk.Button(tools,text='暂停查看',command=self.toggle_pause);self.pause.pack(side='right',padx=(8,0))
         select=ttk.Combobox(tools,textvariable=self.range,values=list(RANGES),state='readonly',width=13)
         select.pack(side='right',padx=(8,0));select.bind('<<ComboboxSelected>>',lambda e:self.changed())
-        switch=ttk.Combobox(tools,textvariable=self.view,values=['曲线','采样明细'],state='readonly',width=10)
+        switch=ttk.Combobox(tools,textvariable=self.view,values=['双包对比','曲线','采样明细'],state='readonly',width=10)
         switch.pack(side='right');switch.bind('<<ComboboxSelected>>',lambda e:self.switch_view())
         self.caption=ttk.Label(self,textvariable=self.detail,foreground=MUTED,wraplength=900)
         self.caption.pack(side='bottom',anchor='w',pady=(8,0))
@@ -85,12 +85,16 @@ class MonitorCharts(ttk.Frame):
         self.table_host=ttk.Frame(self.body)
         from desktop_view import table
         app.resource_table=table(self.table_host,[('sec','经过 / 秒',80),('cpu','CPU %',90),('memory','PSS MiB',110),('cache','缓存 MiB',110),('note','采样说明',350)])
+        from pair_charts import PairCharts
+        self.pair=PairCharts(self.body,app.chart_datasets)
+        self.range_control=select;self.switch_view()
 
     def reset(self,config):
         self.frozen=None;self.selected=None;self.pause.configure(text='暂停查看')
         self.context.set(('改造前' if config['role']=='before' else '改造后')+' · 实时资源')
         self.detail.set('悬停或按 ← / → 查看采样值；系统缓存为测试前后快照。')
         self.request_draw()
+        self.pair.reset()
 
     def source(self):
         if self.frozen is not None:return self.frozen
@@ -108,8 +112,13 @@ class MonitorCharts(ttk.Frame):
         self.selected=None;self.request_draw()
 
     def switch_view(self):
-        if self.view.get()=='曲线':self.table_host.pack_forget();self.plot_host.pack(fill='both',expand=True)
-        else:self.plot_host.pack_forget();self.table_host.pack(fill='both',expand=True)
+        self.table_host.pack_forget();self.plot_host.pack_forget();self.pair.pack_forget()
+        paired=self.view.get()=='双包对比'
+        target=self.pair if paired else self.plot_host if self.view.get()=='曲线' else self.table_host
+        target.pack(fill='both',expand=True)
+        if paired:self.pause.pack_forget();self.range_control.pack_forget();self.caption.pack_forget()
+        else:
+            self.pause.pack(side='right',padx=(8,0));self.range_control.pack(side='right',padx=(8,0));self.caption.pack(side='bottom',anchor='w',pady=(8,0))
         self.request_draw()
 
     def scroll(self,event):

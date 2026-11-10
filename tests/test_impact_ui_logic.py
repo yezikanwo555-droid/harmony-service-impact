@@ -25,7 +25,7 @@ class Tests(unittest.TestCase):
                 p=Path(folder)/(role+'.json');engine.save_json(p,system_data(role))
                 with patch.object(ui.filedialog,'askopenfilename',return_value=str(p)):
                     self.app.import_result(role)
-            self.assertEqual(len(self.app.compare_table.get_children()),12)
+            self.assertEqual(len(self.app.compare_table.get_children()),len(engine.METRICS))
             self.app.v['out'].set(folder)
             with patch.object(ui.webbrowser,'open') as opened:
                 self.app.make_report()

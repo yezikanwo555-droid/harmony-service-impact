@@ -118,7 +118,9 @@ def build(app):
     monkey=ttk.Frame(body,style='Card.TFrame');monkey.grid(row=2,column=0,columnspan=3,sticky='ew')
     for col,(text,key) in enumerate([('Monkey 时长 / 秒','monkey_seconds'),('最多事件','monkey_events'),('事件间隔 / ms','monkey_interval_ms'),('随机种子','monkey_seed')]):
         monkey.columnconfigure(col,weight=1);label(monkey,text,'MutedCard.TLabel').grid(row=0,column=col,sticky='w');app.entry(monkey,app.v[key],1,col,width=8)
-    label(monkey,'事件次数或时长先到即停。随机操作可能触发业务，请使用测试账号。','MutedCard.TLabel').grid(row=2,column=0,columnspan=4,sticky='w',pady=(0,10))
+    app.monkey_in_app_check=ttk.Checkbutton(monkey,text='应用内模式：关闭随机返回，操作后检查；跳出自动拉回，失败停止',variable=app.v['monkey_in_app'],onvalue='1',offvalue='0')
+    app.monkey_in_app_check.grid(row=2,column=0,columnspan=4,sticky='w',pady=(2,6));app.controls.append(app.monkey_in_app_check)
+    label(monkey,'事件次数或时长先到即停。随机操作可能触发业务，请使用测试账号。','MutedCard.TLabel').grid(row=3,column=0,columnspan=4,sticky='w',pady=(0,10))
     def mode_changed(*a):
         if 'Monkey' in app.v['test_mode'].get():monkey.grid()
         else:monkey.grid_remove()
@@ -140,6 +142,7 @@ def build(app):
         metrics.columnconfigure(col,weight=1,uniform='metric');f=ttk.Frame(metrics,style='Card.TFrame',padding=(18,10));f.grid(row=0,column=col,sticky='ew',padx=(0,10))
         label(f,text,'MutedCard.TLabel').pack(anchor='w');ttk.Label(f,textvariable=var,style='Metric.TLabel').pack(anchor='w',pady=(10,0))
     from monitor_charts import MonitorCharts
+    ttk.Label(monitor,textvariable=app.traffic_text,foreground=INK,wraplength=900).pack(fill='x',pady=(0,8))
     app.monitor_charts=MonitorCharts(monitor,app);app.monitor_charts.pack(fill='both',expand=True)
     # Comparison workspace.
     compare=pages[2];action=ttk.Frame(compare);action.pack(fill='x',pady=(0,12))
@@ -147,8 +150,12 @@ def build(app):
     for text,callback,style in [('刷新对比',app.refresh_compare,'TButton'),('生成对比报告',app.make_report,'Primary.TButton')]:
         b=ttk.Button(action,text=text,command=callback,style=style);b.pack(side='right',padx=4);app.controls.append(b)
     ttk.Label(compare,textvariable=app.summary_text,wraplength=850,foreground=MUTED).pack(anchor='w',pady=(0,14))
-    app.compare_table=table(compare,[('metric','指标',200),('before','改造前',100),('after','改造后',100),('delta','差值',90),('pct','变化率 %',100),('status','提示',220)])
-    ttk.Label(compare,text='报告保留缺失指标、可比性提示和网络校验记录。关注阈值不等于验收标准。',foreground=MUTED).pack(anchor='w',pady=12)
+    compare_views=ttk.Notebook(compare);compare_views.pack(fill='both',expand=True)
+    plots=ttk.Frame(compare_views,padding=8);numbers=ttk.Frame(compare_views,padding=8)
+    compare_views.add(plots,text='双包曲线');compare_views.add(numbers,text='指标明细')
+    from pair_charts import PairCharts
+    app.pair_charts=PairCharts(plots,app.chart_datasets);app.pair_charts.pack(fill='both',expand=True)
+    app.compare_table=table(numbers,[('metric','指标',200),('before','改造前',100),('after','改造后',100),('delta','差值',90),('pct','变化率 %',100),('status','提示',220)])
     # Logs and release workspace.
     logs=pages[3];app.log=tk.Text(logs,state='disabled',wrap='word',font=('Consolas',10),bg='#172238',fg='#cbd5e1',relief='flat',padx=20,pady=18)
     bar=ttk.Scrollbar(logs,command=app.log.yview);bar.pack(side='right',fill='y');app.log.pack(side='left',fill='both',expand=True);app.log.configure(yscrollcommand=bar.set)

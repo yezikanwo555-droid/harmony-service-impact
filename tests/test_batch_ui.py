@@ -29,7 +29,7 @@ class Tests(unittest.TestCase):
                 with patch.object(ui.webbrowser,'open') as opened:
                     app.poll();opened.assert_called_once_with(report.as_uri())
                 self.assertFalse(app.batch_running);self.assertEqual(str(app.stop_button['state']),'disabled')
-                self.assertEqual(len(app.compare_table.get_children()),12)
+                self.assertEqual(len(app.compare_table.get_children()),len(ui.engine.METRICS))
             finally:app.destroy()
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -1,5 +1,6 @@
 """Build a portable Windows release from an explicit, data-free allowlist."""
 import hashlib
+import shutil
 from pathlib import Path
 import runpy
 import subprocess
@@ -22,7 +23,9 @@ def main():
         for name in ('README.md','CHANGELOG.md','docs/使用说明.txt','docs/网络环境说明.txt'):
             z.write(ROOT/name,name)
     digest=hashlib.sha256(package.read_bytes()).hexdigest()
-    (dist/'SHA256SUMS.txt').write_text(digest+'  '+package.name+'\n',encoding='utf8')
+    standalone=dist/('ServiceImpact-'+meta['VERSION']+'-windows-x64.exe')
+    shutil.copy2(binary_dir/'ServiceImpact.exe',standalone)
+    (dist/'SHA256SUMS.txt').write_text(digest+'  '+package.name+'\n'+hashlib.sha256(standalone.read_bytes()).hexdigest()+'  '+standalone.name+'\n',encoding='utf8')
     print(package)
     print('SHA256 '+digest)
 

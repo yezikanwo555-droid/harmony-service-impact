@@ -20,6 +20,7 @@ def fixture(role):
           'config':dict(scenario='same',duration=60,interval=5,count=5,settle=3,monitor_only=False),
           'environment':dict(device='D',system='S',bundle='com.example',module='entry',ability='EntryAbility',installed_hash=role,version_name='1',version_code=1),
           'artifact':dict(status='ok',mib=10,format='.app',name='test.app',sha256=role),
+          'traffic':dict(status='complete',upload_bytes=1024,download_bytes=2048,total_bytes=3072),
           'cache':dict(path='/cache',manual_start_mib=None,manual_end_mib=None),
           'startup':[dict(requested_mode=mode,status='ok',total_time_ms=100+i) for mode in ('cold','hot') for i in range(5)],
           'resources':[dict(elapsed_s=i*5,cpu_pct=1+i/10,pss_mib=100+i,cache_mib=10+i) for i in range(6)]}
